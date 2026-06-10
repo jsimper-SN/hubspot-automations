@@ -52,6 +52,7 @@ async function fetchUnprocessedTickets() {
         filters: [
           { propertyName: "hs_pipeline",         operator: "EQ",               value: CANCEL_TEST_PIPELINE },
           { propertyName: "hs_pipeline_stage",   operator: "EQ",               value: TAKEDOWN_COMPLETED },
+          { propertyName: "cancellation_scope",  operator: "NEQ",              value: "Full customer cancellation" },
           { propertyName: "cancellation_synced", operator: "NOT_HAS_PROPERTY" },
         ],
       }],
