@@ -120,7 +120,14 @@ async function main() {
     }
     if (!p.cancelled_product && !p.cancelled_amount) {
       console.warn("  ⚠ Neither cancelled_product nor cancelled_amount set on ticket — skipping");
+      console.warn("    → Check the HubSpot workflow copies cancelled_product and cancelled_amount from the deal");
       results.push({ ticketId, status: "skipped: no cancelled_product or cancelled_amount" });
+      continue;
+    }
+    if (p.cancellation_scope === "Product downgrade" && !p.downgrading_to_product) {
+      console.warn("  ⚠ cancellation_scope is Product downgrade but downgrading_to_product is not set — skipping");
+      console.warn("    → Check the HubSpot workflow copies downgrading_to_product from the deal onto the ticket");
+      results.push({ ticketId, status: "skipped: downgrading_to_product missing on downgrade ticket" });
       continue;
     }
 
