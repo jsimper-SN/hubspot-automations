@@ -1,20 +1,29 @@
 // Cancellation Sync — Cancellation-test ticket pipeline
 //
 // Trigger: ticket in "Cancellation - test" pipeline reaches "Closed - Takedown completed"
-// Source of truth: the cancellation DEAL associated to the ticket
 //
-// Three outcomes, driven by cancellation_scope on the deal:
-//   "Product downgrade"          → remove cancelled_products, add downgrading_to_product, subtract cancelled_amount
-//   "Product cancellation"       → remove cancelled_products, subtract cancelled_amount
-//   "Full customer cancellation" → remove cancelled_products, subtract cancelled_amount
+// The HubSpot workflow that creates these tickets must copy four properties from the
+// originating cancellation deal onto the ticket at creation time:
+//   - cancellation_scope       (Product downgrade | Product cancellation | Full customer cancellation)
+//   - cancelled_product        (products to remove, semicolon-delimited)
+//   - cancelled_amount         (£ amount to subtract from the active subscription deal)
+//   - downgrading_to_product   (product(s) to add — downgrade only)
+//
+// This script then reads those values directly from the ticket and navigates:
+//   ticket → company → active subscription deal
+//
+// Three outcomes driven by cancellation_scope:
+//   "Product downgrade"          → remove cancelled_product, add downgrading_to_product, subtract cancelled_amount
+//   "Product cancellation"       → remove cancelled_product, subtract cancelled_amount
+//   "Full customer cancellation" → remove cancelled_product, subtract cancelled_amount
 
 const TOKEN = process.env.HUBSPOT_ACCESS_TOKEN;
 if (!TOKEN) throw new Error("HUBSPOT_ACCESS_TOKEN env var is not set");
 
-const CANCEL_TEST_PIPELINE   = "3871606003";
-const TAKEDOWN_COMPLETED     = "5508107496";
-const SUB_PIPELINE           = "3773293783";
-const ACTIVE_STAGE           = "5277843668";
+const CANCEL_TEST_PIPELINE = "3871606003";
+const TAKEDOWN_COMPLETED   = "5508107496";
+const SUB_PIPELINE         = "3773293783";
+const ACTIVE_STAGE         = "5277843668";
 
 async function hs(method, path, body) {
   const res = await fetch(`https://api.hubapi.com${path}`, {
@@ -41,12 +50,18 @@ async function fetchUnprocessedTickets() {
     const body = {
       filterGroups: [{
         filters: [
-          { propertyName: "hs_pipeline",       operator: "EQ",               value: CANCEL_TEST_PIPELINE },
-          { propertyName: "hs_pipeline_stage", operator: "EQ",               value: TAKEDOWN_COMPLETED },
+          { propertyName: "hs_pipeline",         operator: "EQ",               value: CANCEL_TEST_PIPELINE },
+          { propertyName: "hs_pipeline_stage",   operator: "EQ",               value: TAKEDOWN_COMPLETED },
           { propertyName: "cancellation_synced", operator: "NOT_HAS_PROPERTY" },
         ],
       }],
-      properties: ["subject", "hs_pipeline_stage", "cancellation_synced"],
+      properties: [
+        "subject",
+        "cancellation_scope",
+        "cancelled_product",
+        "cancelled_amount",
+        "downgrading_to_product",
+      ],
       limit: 100,
       ...(after ? { after } : {}),
     };
@@ -56,23 +71,6 @@ async function fetchUnprocessedTickets() {
     if (!after) break;
   }
   return tickets;
-}
-
-async function getCancellationDeal(ticketId) {
-  // Try direct ticket → deal association first
-  const assoc = await hs("GET", `/crm/v3/objects/tickets/${ticketId}/associations/deals`);
-  const dealIds = assoc.results?.map(r => r.id) ?? [];
-
-  if (dealIds.length === 0) return null;
-
-  // Batch-read to find the one in the Cancellation deal pipeline
-  const batch = await hs("POST", "/crm/v3/objects/deals/batch/read", {
-    inputs: dealIds.map(id => ({ id })),
-    properties: ["dealname", "pipeline", "dealstage", "cancellation_scope",
-                 "cancelled_products", "cancelled_amount", "downgrading_to_product"],
-  });
-
-  return batch.results.find(d => d.properties.pipeline === "3871606001") ?? null;
 }
 
 async function getActiveSubDeal(companyId) {
@@ -104,42 +102,37 @@ async function main() {
 
   for (const ticket of tickets) {
     const ticketId = ticket.id;
-    console.log(`\nProcessing ticket ${ticketId}: ${ticket.properties.subject}`);
+    const p = ticket.properties;
 
-    // 1. Get the cancellation deal
-    const cancelDeal = await getCancellationDeal(ticketId);
-    if (!cancelDeal) {
-      console.warn("  ⚠ No cancellation deal found via ticket→deal association — skipping");
-      results.push({ ticketId, status: "skipped: no cancellation deal found" });
+    console.log(`\nProcessing ticket ${ticketId}: ${p.subject}`);
+    console.log(`  Scope:              ${p.cancellation_scope}`);
+    console.log(`  Cancelled products: ${p.cancelled_product}`);
+    console.log(`  Cancelled amount:   £${p.cancelled_amount}`);
+    console.log(`  Downgrading to:     ${p.downgrading_to_product || "n/a"}`);
+
+    // Validate required fields are populated (copied from deal by HubSpot workflow)
+    if (!p.cancellation_scope) {
+      console.warn("  ⚠ cancellation_scope not set on ticket — skipping");
+      console.warn("    → Check the HubSpot workflow copies this field from the deal onto the ticket");
+      results.push({ ticketId, status: "skipped: cancellation_scope missing" });
+      continue;
+    }
+    if (!p.cancelled_product && !p.cancelled_amount) {
+      console.warn("  ⚠ Neither cancelled_product nor cancelled_amount set on ticket — skipping");
+      results.push({ ticketId, status: "skipped: no cancelled_product or cancelled_amount" });
       continue;
     }
 
-    const scope           = cancelDeal.properties.cancellation_scope;
-    const cancelledProds  = cancelDeal.properties.cancelled_products || "";
-    const cancelledAmount = parseFloat(cancelDeal.properties.cancelled_amount) || 0;
-    const downgradingTo   = cancelDeal.properties.downgrading_to_product || "";
-
-    console.log(`  Scope: ${scope}`);
-    console.log(`  Cancelled products: ${cancelledProds}`);
-    console.log(`  Cancelled amount: £${cancelledAmount}`);
-    if (scope === "Product downgrade") console.log(`  Downgrading to: ${downgradingTo}`);
-
-    if (!scope) {
-      console.warn("  ⚠ cancellation_scope not set on deal — skipping");
-      results.push({ ticketId, status: "skipped: no cancellation_scope on deal" });
-      continue;
-    }
-
-    // 2. Get company from the cancellation deal
-    const dealAssoc = await hs("GET", `/crm/v3/objects/deals/${cancelDeal.id}/associations/companies`);
-    const companyId = dealAssoc.results?.[0]?.id;
+    // Get associated company directly from ticket
+    const ticketCompanyAssoc = await hs("GET", `/crm/v3/objects/tickets/${ticketId}/associations/companies`);
+    const companyId = ticketCompanyAssoc.results?.[0]?.id;
     if (!companyId) {
-      console.warn("  ⚠ No company on cancellation deal — skipping");
-      results.push({ ticketId, status: "skipped: no company on deal" });
+      console.warn("  ⚠ No company associated to ticket — skipping");
+      results.push({ ticketId, status: "skipped: no company on ticket" });
       continue;
     }
 
-    // 3. Find Active Subscription deal
+    // Find Active Subscription deal for that company
     const subDeal = await getActiveSubDeal(companyId);
     if (!subDeal) {
       console.warn(`  ⚠ No Active Subscription deal for company ${companyId} — skipping`);
@@ -147,45 +140,45 @@ async function main() {
       continue;
     }
 
-    const subDealId      = subDeal.id;
-    const currentAmount  = parseFloat(subDeal.properties.amount) || 0;
-    const currentProds   = splitProducts(subDeal.properties.product);
-    const cancelledList  = splitProducts(cancelledProds);
-    const downgradingList = splitProducts(downgradingTo);
+    const subDealId       = subDeal.id;
+    const currentAmount   = parseFloat(subDeal.properties.amount) || 0;
+    const currentProds    = splitProducts(subDeal.properties.product);
+    const cancelledList   = splitProducts(p.cancelled_product);
+    const downgradingList = splitProducts(p.downgrading_to_product);
+    const cancelledAmount = parseFloat(p.cancelled_amount) || 0;
 
-    // 4. Calculate new products and amount
+    // Calculate updated products
     let newProds;
-    if (scope === "Product downgrade") {
-      // Remove cancelled products, add downgrading_to products
-      const afterRemoval = currentProds.filter(p => !cancelledList.includes(p));
+    if (p.cancellation_scope === "Product downgrade") {
+      const afterRemoval = currentProds.filter(prod => !cancelledList.includes(prod));
       newProds = [...new Set([...afterRemoval, ...downgradingList])];
     } else {
-      // Product cancellation or Full customer cancellation — just remove
-      newProds = currentProds.filter(p => !cancelledList.includes(p));
+      // Product cancellation or Full customer cancellation
+      newProds = currentProds.filter(prod => !cancelledList.includes(prod));
     }
 
-    const newAmount = Math.max(0, Math.round((currentAmount - cancelledAmount) * 100) / 100);
+    const newAmount  = Math.max(0, Math.round((currentAmount - cancelledAmount) * 100) / 100);
     const newProduct = newProds.join(";");
 
-    // 5. Update the Active Subscription deal
+    // Update Active Subscription deal
     await hs("PATCH", `/crm/v3/objects/deals/${subDealId}`, {
       properties: { amount: String(newAmount), product: newProduct },
     });
 
-    // 6. Mark ticket as synced
+    // Mark ticket as synced so it isn't processed again
     await hs("PATCH", `/crm/v3/objects/tickets/${ticketId}`, {
       properties: { cancellation_synced: "true" },
     });
 
     console.log(`  ✓ Updated subscription deal ${subDealId}`);
-    console.log(`    Amount: £${currentAmount} → £${newAmount}`);
-    console.log(`    Products: [${currentProds.join(", ")}] → [${newProds.join(", ")}]`);
+    console.log(`    Amount:   £${currentAmount} → £${newAmount}`);
+    console.log(`    Products: [${currentProds.join(", ")}]`);
+    console.log(`          → [${newProds.join(", ")}]`);
 
     results.push({
       ticketId,
-      cancellationDealId: cancelDeal.id,
       subscriptionDealId: subDealId,
-      scope,
+      scope: p.cancellation_scope,
       previousAmount: currentAmount,
       newAmount,
       previousProducts: currentProds.join(";"),
