@@ -7,13 +7,13 @@
 //   - cancellation_scope       (Product downgrade | Product cancellation | Full customer cancellation)
 //   - cancelled_product        (products to remove, semicolon-delimited)
 //   - cancelled_amount         (£ amount to subtract from the active subscription deal)
-//   - downgrading_to_product   (product(s) to add — downgrade only)
+//   - downgrading_product_to   (product(s) to add — downgrade only)
 //
 // This script then reads those values directly from the ticket and navigates:
 //   ticket → company → active subscription deal
 //
 // Three outcomes driven by cancellation_scope:
-//   "Product downgrade"          → remove cancelled_product, add downgrading_to_product, subtract cancelled_amount
+//   "Product downgrade"          → remove cancelled_product, add downgrading_product_to, subtract cancelled_amount
 //   "Product cancellation"       → remove cancelled_product, subtract cancelled_amount
 //   "Full customer cancellation" → remove cancelled_product, subtract cancelled_amount
 
@@ -61,7 +61,7 @@ async function fetchUnprocessedTickets() {
         "cancellation_scope",
         "cancelled_product",
         "cancelled_amount",
-        "downgrading_to_product",
+        "downgrading_product_to",
       ],
       limit: 100,
       ...(after ? { after } : {}),
@@ -109,7 +109,7 @@ async function main() {
     console.log(`  Scope:              ${p.cancellation_scope}`);
     console.log(`  Cancelled products: ${p.cancelled_product}`);
     console.log(`  Cancelled amount:   £${p.cancelled_amount}`);
-    console.log(`  Downgrading to:     ${p.downgrading_to_product || "n/a"}`);
+    console.log(`  Downgrading to:     ${p.downgrading_product_to || "n/a"}`);
 
     // Validate required fields are populated (copied from deal by HubSpot workflow)
     if (!p.cancellation_scope) {
@@ -124,10 +124,10 @@ async function main() {
       results.push({ ticketId, status: "skipped: no cancelled_product or cancelled_amount" });
       continue;
     }
-    if (p.cancellation_scope === "Product downgrade" && !p.downgrading_to_product) {
-      console.warn("  ⚠ cancellation_scope is Product downgrade but downgrading_to_product is not set — skipping");
-      console.warn("    → Check the HubSpot workflow copies downgrading_to_product from the deal onto the ticket");
-      results.push({ ticketId, status: "skipped: downgrading_to_product missing on downgrade ticket" });
+    if (p.cancellation_scope === "Product downgrade" && !p.downgrading_product_to) {
+      console.warn("  ⚠ cancellation_scope is Product downgrade but downgrading_product_to is not set — skipping");
+      console.warn("    → Check the HubSpot workflow copies downgrading_product_to from the deal onto the ticket");
+      results.push({ ticketId, status: "skipped: downgrading_product_to missing on downgrade ticket" });
       continue;
     }
 
@@ -152,7 +152,7 @@ async function main() {
     const currentAmount   = parseFloat(subDeal.properties.amount) || 0;
     const currentProds    = splitProducts(subDeal.properties.product);
     const cancelledList   = splitProducts(p.cancelled_product);
-    const downgradingList = splitProducts(p.downgrading_to_product);
+    const downgradingList = splitProducts(p.downgrading_product_to);
     const cancelledAmount = parseFloat(p.cancelled_amount) || 0;
 
     // Calculate updated products
