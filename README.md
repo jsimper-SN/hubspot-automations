@@ -161,7 +161,9 @@ Portal `147829287` (EU — `app-eu1.hubspot.com`), company currency GBP.
 
 ## Known data issue
 
-Some companies have more than one Active Subscription deal. Real company names and deal
+At least one company in the portal has more than one Active Subscription deal. Real
+company names, deal IDs and amounts are tracked internally (ask Jordan), not in this
+public README.
 
 `discount-sync` skips these with a warning rather than writing to an arbitrary one.
 The older scripts use `.find()` and will silently take the first match, so a duplicate
