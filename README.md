@@ -98,6 +98,18 @@ wrong with the scripts or HubSpot.
 
 ## Running locally
 
+Running locally consumes **no** GitHub Actions minutes. Use it if the allowance is
+exhausted mid-cycle, or to force an immediate catch-up instead of waiting for the hour.
+
+All five, in the same order as the workflow (Windows PowerShell):
+
+```powershell
+$env:HUBSPOT_ACCESS_TOKEN = 'pat-eu1-your-token-here'
+.\run-all.ps1
+```
+
+Or one at a time:
+
 ```bash
 HUBSPOT_ACCESS_TOKEN=pat-eu1-xxx node scripts/expansion-sync.mjs
 HUBSPOT_ACCESS_TOKEN=pat-eu1-xxx node scripts/cancellation-sync.mjs
@@ -105,6 +117,8 @@ HUBSPOT_ACCESS_TOKEN=pat-eu1-xxx node scripts/full-cancellation-sync.mjs
 HUBSPOT_ACCESS_TOKEN=pat-eu1-xxx node scripts/failed-pay-sync.mjs
 HUBSPOT_ACCESS_TOKEN=pat-eu1-xxx node scripts/discount-sync.mjs
 ```
+
+Never commit the token. It belongs in the shell session and in the repo secret, nowhere else.
 
 ## HubSpot config
 
