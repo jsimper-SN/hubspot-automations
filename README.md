@@ -4,13 +4,41 @@ GitHub Actions–powered HubSpot sync scripts replacing the previous Pipedream w
 
 ## Workflows
 
-| Workflow | Schedule | What it does |
+There is **one** workflow, `hubspot-sync`, running hourly. It executes all five sync
+scripts sequentially inside a single job, in this order:
+
+| Order | Script | What it does |
 |---|---|---|
-| `expansion-sync` | Every hour (on the hour) | Finds Expansion Closed Won deals not yet synced → adds amount + products to the company's Active Subscription deal |
-| `full-cancellation-sync` | Every hour (at :15) | Finds Takedown Completed tickets with scope `Full customer cancellation` → moves the company's Active Subscription deal to Ended Subscription |
-| `cancellation-sync` | Every hour (at :30) | Finds partial cancellation tickets (Takedown Completed, scope not `Full customer cancellation`) not yet synced → removes amount + products from the company's Active Subscription deal |
-| `failed-pay-sync` | Every hour (at :45) | Finds Failed pay tickets at Takedown Completed → moves the company's Active Subscription deal to Ended Subscription |
-| `discount-sync` | Every hour (at :50) | Finds **Cancellation deals** at `Sub lost` with scope `Referral discount` or `Retention discount` → subtracts `cancelled_amount` from the company's Active Subscription deal amount |
+| 1 | `expansion-sync` | Finds Expansion Closed Won deals not yet synced → adds amount + products to the company's Active Subscription deal |
+| 2 | `full-cancellation-sync` | Finds Takedown Completed tickets with scope `Full customer cancellation` → moves the company's Active Subscription deal to Ended Subscription |
+| 3 | `cancellation-sync` | Finds partial cancellation tickets (Takedown Completed, scope not `Full customer cancellation`) not yet synced → removes amount + products from the company's Active Subscription deal |
+| 4 | `failed-pay-sync` | Finds Failed pay tickets at Takedown Completed → moves the company's Active Subscription deal to Ended Subscription |
+| 5 | `discount-sync` | Finds **Cancellation deals** at `Sub lost` with scope `Referral discount` or `Retention discount` → subtracts `cancelled_amount` from the company's Active Subscription deal amount |
+
+Order matters: expansion adds to subscriptions before cancellations reduce or end them,
+and discounts apply last.
+
+A failure in one script does not stop the others - each is run independently and the job
+reports failure at the end listing which script(s) failed. Each script's output is
+collapsed into its own log group.
+
+### Why one workflow and not five
+
+These were originally five separate workflows on staggered crons (:00, :15, :30, :45, :50).
+GitHub bills Actions per job and rounds each job up to a whole minute, so five hourly
+workflows cost roughly:
+
+```
+5 workflows × 24 hours × 30 days = 3,600 job runs = ~3,600 minutes/month
+```
+
+The account's plan includes **2,000 minutes/month**, so the allowance was exhausted around
+the 20th of the month, at which point every run failed until the billing cycle reset. Four
+workflows (2,880/month) already exceeded it.
+
+One hourly job running all five costs ~720-1,440 minutes/month, comfortably inside the
+allowance. If more headroom is ever needed, change the cron to `'0 */2 * * *'` (every two
+hours) to halve it again.
 
 ### Ticket-driven vs deal-driven
 
@@ -60,7 +88,13 @@ Go to the **Actions** tab and confirm workflows are enabled.
 
 ### 3. Test manually
 
-Click **Run workflow** on either workflow to trigger a run outside the schedule.
+Click **Run workflow** on the `HubSpot Sync` workflow to trigger a run outside the schedule.
+
+### 4. Keep an eye on Actions minutes
+
+Settings → Billing → Actions. This is a private repo, so minutes are metered. If runs start
+failing with no step output, the allowance has been exhausted rather than anything being
+wrong with the scripts or HubSpot.
 
 ## Running locally
 

@@ -1,0 +1,47 @@
+name: HubSpot Sync
+
+# All five syncs run sequentially inside ONE job, once an hour.
+#
+# They used to be five separate workflows on staggered crons (:00, :15, :30, :45, :50).
+# GitHub bills Actions per job, rounding each job up to a whole minute, so five hourly
+# workflows cost ~3,600 minutes/month against a 2,000-minute allowance. One hourly job
+# running all five costs ~720-1,440 minutes/month instead.
+#
+# Order matters: expansion adds to subscriptions before cancellations reduce or end them,
+# and discounts are applied last.
+
+on:
+  schedule:
+    - cron: '0 * * * *'   # hourly
+  workflow_dispatch:        # allow manual trigger from GitHub UI
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Run all HubSpot syncs
+        env:
+          HUBSPOT_ACCESS_TOKEN: ${{ secrets.HUBSPOT_ACCESS_TOKEN }}
+        run: |
+          set +e
+          failed=""
+          for s in expansion-sync full-cancellation-sync cancellation-sync failed-pay-sync discount-sync; do
+            echo "::group::$s"
+            node "scripts/$s.mjs"
+            if [ $? -ne 0 ]; then
+              echo "::error::$s failed"
+              failed="$failed $s"
+            fi
+            echo "::endgroup::"
+          done
+          if [ -n "$failed" ]; then
+            echo "Failed sync(s):$failed"
+            exit 1
+          fi
+          echo "All syncs completed successfully."
